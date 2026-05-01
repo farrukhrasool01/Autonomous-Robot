@@ -20,6 +20,7 @@ from kinematics import (
     clamp_twist,
     wheel_speeds_from_twist,
 )
+from sensor_debug import format_compact_sensors, format_sensor_snapshot
 
 robot = Robot()
 timestep = int(robot.getBasicTimeStep())
@@ -157,6 +158,88 @@ def get_front_laser_min():
     front = [r for r in ranges[start:end] if r > 0.0 and math.isfinite(r)]
     return min(front) if front else float('inf')
 
+def read_sensor_snapshot():
+    """Read every enabled sensor and return a readings dict for sensor_debug."""
+    r = {}
+
+    # Wheel encoders
+    for key, sensor in [
+        ("enc_fl", fl_wheel_sensor), ("enc_fr", fr_wheel_sensor),
+        ("enc_rl", rl_wheel_sensor), ("enc_rr", rr_wheel_sensor),
+    ]:
+        try:
+            r[key] = sensor.getValue() if sensor else None
+        except Exception:
+            r[key] = None
+
+    # IMU — getValues() for accel/gyro/compass, getRollPitchYaw() for inertial_unit
+    for key, sensor, method in [
+        ("accel",   accelerometer, "getValues"),
+        ("gyro",    gyro,          "getValues"),
+        ("compass", compass,       "getValues"),
+        ("imu_rpy", inertial_unit, "getRollPitchYaw"),
+    ]:
+        try:
+            r[key] = tuple(getattr(sensor, method)()) if sensor else None
+        except Exception:
+            r[key] = None
+
+    # Range sensors
+    for key, sensor in [
+        ("range_fl", fl_range), ("range_fr", fr_range),
+        ("range_rl", rl_range), ("range_rr", rr_range),
+    ]:
+        try:
+            r[key] = sensor.getValue() if sensor else None
+        except Exception:
+            r[key] = None
+
+    # Laser
+    if laser:
+        try:
+            data = laser.getRangeImage()
+            if data:
+                finite = [v for v in data if math.isfinite(v) and v > 0.0]
+                r["laser_count"] = len(data)
+                r["laser_min"]   = min(finite) if finite else float("inf")
+                r["laser_max"]   = max(finite) if finite else 0.0
+                r["laser_mean"]  = sum(finite) / len(finite) if finite else float("nan")
+            else:
+                r["laser_count"] = 0
+        except Exception:
+            r["laser_count"] = None
+    else:
+        r["laser_count"] = None
+
+    # RGB camera — image is BGRA byte order in Webots
+    if camera_rgb:
+        try:
+            w = camera_rgb.getWidth()
+            h = camera_rgb.getHeight()
+            img = camera_rgb.getImage()
+            idx = 4 * (h // 2 * w + w // 2)
+            b, g, rv = img[idx], img[idx + 1], img[idx + 2]
+            r["cam_rgb"] = (w, h, (rv, g, b))
+        except Exception:
+            r["cam_rgb"] = None
+    else:
+        r["cam_rgb"] = None
+
+    # Depth camera — try RangeFinder API; silently degrade if device type differs
+    if camera_depth:
+        try:
+            w = camera_depth.getWidth()
+            h = camera_depth.getHeight()
+            depth_data = camera_depth.getRangeImage()
+            ctr = depth_data[h // 2 * w + w // 2] if depth_data else None
+            r["cam_depth"] = (w, h, ctr)
+        except Exception:
+            r["cam_depth"] = None
+    else:
+        r["cam_depth"] = None
+
+    return r
+
 # ---------------------- control params ----------------
 TARGET_LIN_VEL = 0.2    # m/s, forward/backward target speed for teleop
 TARGET_ANG_VEL = 0.5    # rad/s, in-place rotation target rate for teleop
@@ -169,7 +252,15 @@ current_key = -1
 # test mode timer (when >0 the robot will drive forward to check motors)
 test_timer = 0
 
-print("Keyboard controller initialized. Click the 3D view so it has keyboard focus, then use ASDF keys (F/S/A/D) to drive. Press 't' to run a short motor test.")
+# Sensor debug state
+sensor_log_enabled = False   # toggled by L key
+snapshot_cooldown  = 0       # prevents I from firing every step while held
+log_toggle_cooldown = 0      # prevents L from toggling every step while held
+
+print(
+    "Controller ready.  Keys: F/S/A/D drive | Space stop | T self-test | "
+    "I sensor snapshot | L toggle sensor log"
+)
 
 # ---------------------- main loop ---------------------
 while robot.step(timestep) != -1:
@@ -189,6 +280,20 @@ while robot.step(timestep) != -1:
 
     # Simple safety: check front obstacle distance
     front_min = get_front_laser_min()
+
+    # --- Sensor debug: I = full snapshot, L = toggle compact per-step log ---
+    if current_key in (ord('I'), ord('i')) and snapshot_cooldown == 0:
+        print(format_sensor_snapshot(read_sensor_snapshot()))
+        snapshot_cooldown = 20
+    if snapshot_cooldown > 0:
+        snapshot_cooldown -= 1
+
+    if current_key in (ord('L'), ord('l')) and log_toggle_cooldown == 0:
+        sensor_log_enabled = not sensor_log_enabled
+        print(f"Sensor logging {'ON' if sensor_log_enabled else 'OFF'}")
+        log_toggle_cooldown = 20
+    if log_toggle_cooldown > 0:
+        log_toggle_cooldown -= 1
 
     # Map ASDF to body twists (F forward, S back, A yaw-left, D yaw-right)
     if current_key in (ord('F'), ord('f')):
@@ -231,3 +336,5 @@ while robot.step(timestep) != -1:
             f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
             f"-> wL={left_speed:+.2f} wR={right_speed:+.2f} rad/s"
         )
+        if sensor_log_enabled:
+            print(format_compact_sensors(read_sensor_snapshot()))
