@@ -15,6 +15,12 @@ obstacles.
 from controller import Robot, Keyboard
 import math
 
+from kinematics import (
+    MAX_WHEEL_SPEED_RAD_S,
+    clamp_twist,
+    wheel_speeds_from_twist,
+)
+
 robot = Robot()
 timestep = int(robot.getBasicTimeStep())
 
@@ -118,15 +124,20 @@ else:
     print("Keyboard device enabled for controller")
 
 # ---------------------- motion helpers ----------------
-MAX_WHEEL_SPEED = 10.0
-
 def set_wheel_speeds(left_speed, right_speed):
-    left_speed = clamp(left_speed, -MAX_WHEEL_SPEED, MAX_WHEEL_SPEED)
-    right_speed = clamp(right_speed, -MAX_WHEEL_SPEED, MAX_WHEEL_SPEED)
+    left_speed = clamp(left_speed, -MAX_WHEEL_SPEED_RAD_S, MAX_WHEEL_SPEED_RAD_S)
+    right_speed = clamp(right_speed, -MAX_WHEEL_SPEED_RAD_S, MAX_WHEEL_SPEED_RAD_S)
     fl_motor.setVelocity(left_speed)
     rl_motor.setVelocity(left_speed)
     fr_motor.setVelocity(right_speed)
     rr_motor.setVelocity(right_speed)
+
+def drive_twist(v, omega):
+    """Command a body twist (m/s, rad/s); returns the realized (v, omega, wL, wR)."""
+    v_cmd, omega_cmd = clamp_twist(v, omega)
+    left, right = wheel_speeds_from_twist(v_cmd, omega_cmd)
+    set_wheel_speeds(left, right)
+    return v_cmd, omega_cmd, left, right
 
 def stop_robot():
     set_wheel_speeds(0.0, 0.0)
@@ -147,8 +158,8 @@ def get_front_laser_min():
     return min(front) if front else float('inf')
 
 # ---------------------- control params ----------------
-BASE_SPEED = 3.0      # forward/backward speed
-TURN_SPEED = 2.0      # in-place rotation speed
+TARGET_LIN_VEL = 0.2    # m/s, forward/backward target speed for teleop
+TARGET_ANG_VEL = 0.5    # rad/s, in-place rotation target rate for teleop
 FRONT_STOP_DIST = 0.25  # meters: if obstacle closer than this, prevent forward motion
 
 step_count = 0
@@ -172,65 +183,51 @@ while robot.step(timestep) != -1:
         current_key = key
         key = keyboard.getKey()
 
-    # Default: stop
-    left_speed = 0.0
-    right_speed = 0.0
+    # Default twist: hold position
+    v_cmd = 0.0
+    omega_cmd = 0.0
 
     # Simple safety: check front obstacle distance
     front_min = get_front_laser_min()
 
-    # Map ASDF to motions (F forward, S back, A left, D right)
+    # Map ASDF to body twists (F forward, S back, A yaw-left, D yaw-right)
     if current_key in (ord('F'), ord('f')):
-        # forward unless obstacle too close
-        if front_min < FRONT_STOP_DIST:
-            left_speed = 0.0
-            right_speed = 0.0
-        else:
-            left_speed = BASE_SPEED
-            right_speed = BASE_SPEED
+        if front_min >= FRONT_STOP_DIST:
+            v_cmd = TARGET_LIN_VEL
     elif current_key in (ord('S'), ord('s')):
-        left_speed = -BASE_SPEED
-        right_speed = -BASE_SPEED
+        v_cmd = -TARGET_LIN_VEL
     elif current_key in (ord('A'), ord('a')):
-        print("AAAAA")
-        # rotate left in place
-        left_speed = -TURN_SPEED
-        right_speed = TURN_SPEED
+        omega_cmd = TARGET_ANG_VEL
     elif current_key in (ord('D'), ord('d')):
-        # rotate right in place
-        left_speed = TURN_SPEED
-        right_speed = -TURN_SPEED
+        omega_cmd = -TARGET_ANG_VEL
     elif current_key == ord(' '):
-        # spacebar explicitly stops
-        left_speed = 0.0
-        right_speed = 0.0
-    else:
-        # no relevant key: stop motors
-        left_speed = 0.0
-        right_speed = 0.0
+        v_cmd, omega_cmd = 0.0, 0.0
 
-    # Apply speeds
-    set_wheel_speeds(left_speed, right_speed)
-
-    # If 't' is pressed, run a short motor test regardless of laser
+    # If 't' is pressed, schedule a short forward self-test
     if current_key in (ord('T'), ord('t')) and test_timer == 0:
         test_timer = int(2000 / max(1, timestep))  # 2 seconds worth of steps
-        print("Starting 2s motor test at BASE_SPEED to verify motors")
+        print(f"Starting 2s motor test at v={TARGET_LIN_VEL:.2f} m/s to verify motors")
 
+    # Self-test overrides the user twist while it is active
     if test_timer > 0:
-        # during test, override speeds
-        set_wheel_speeds(BASE_SPEED, BASE_SPEED)
+        v_cmd, omega_cmd = TARGET_LIN_VEL, 0.0
         test_timer -= 1
         if test_timer == 0:
+            v_cmd, omega_cmd = 0.0, 0.0
             print("Motor test complete; stopping motors")
-            set_wheel_speeds(0.0, 0.0)
 
-    # Debug output to Webots console to help diagnose why motors may not move
+    # Convert commanded twist into wheel angular velocities and apply.
+    v_real, omega_real, left_speed, right_speed = drive_twist(v_cmd, omega_cmd)
+
+    # Debug output to Webots console
     if step_count % 10 == 0:  # throttle logging
         active = current_key if current_key != -1 else 'None'
-        # try to show a readable character when possible
         try:
             active_repr = chr(active) if isinstance(active, int) and 32 <= active <= 126 else active
         except Exception:
             active_repr = active
-        print(f"step={step_count} active_key={active_repr} front_min={front_min:.3f} left_speed={left_speed} right_speed={right_speed}")
+        print(
+            f"step={step_count} key={active_repr} front_min={front_min:.3f} "
+            f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
+            f"-> wL={left_speed:+.2f} wR={right_speed:+.2f} rad/s"
+        )
