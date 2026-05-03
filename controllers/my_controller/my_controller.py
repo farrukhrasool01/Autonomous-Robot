@@ -292,18 +292,23 @@ def read_sensor_snapshot():
 # BLOCK_TIMEOUT    = 40    # front-blocked steps before timeout recovery activates
 # REAR_SAFE_DIST   = 0.25  # rear range below this → do not reverse (m)
 
-TARGET_LIN_VEL = 0.14
+TARGET_LIN_VEL = 0.05
 TARGET_ANG_VEL = 0.50
 
 
+FRONT_CAUTION_DIST = 0.35
+CAUTION_LIN_VEL = 0.04
+CAUTION_ANG_VEL = 0.08
+
+
 FRONT_STOP_DIST  = 0.15
-FRONT_BLOCK_DIST = 0.30
+FRONT_BLOCK_DIST = 0.25
 
 WALL_TARGET_DIST = 0.35
 WALL_CLOSE_BAND  = 0.12
 WALL_LOST_DIST   = 0.80
 
-SIDE_DANGER_DIST = 0.18
+SIDE_DANGER_DIST = 0.05
 OMEGA_SMALL      = 0.22
 
 BLOCK_TIMEOUT  = 40
@@ -427,7 +432,7 @@ while robot.step(timestep) != -1:
             block_timer = 0
 
         # If depth is truly blocked, bypass wall following and turn away.
-        if depth_blocked:
+        if laser_blocked or depth_blocked:
             v_cmd = 0.0
             omega_cmd = TARGET_ANG_VEL
             sel_label = "depth_block_turn_left"
@@ -438,11 +443,14 @@ while robot.step(timestep) != -1:
             fused_front = center_min
 
             v_cmd, omega_cmd, sel_label = wall_follow_twist(
-                fused_front, right_min, left_min,
-                block_timer, rear_safe,
-                FRONT_BLOCK_DIST, WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
-                BLOCK_TIMEOUT, TARGET_LIN_VEL, OMEGA_SMALL, TARGET_ANG_VEL,
-            )
+                    fused_front, right_min, left_min,
+                    block_timer, rear_safe,
+                    FRONT_BLOCK_DIST, FRONT_CAUTION_DIST,
+                    WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
+                    BLOCK_TIMEOUT,
+                    TARGET_LIN_VEL, CAUTION_LIN_VEL,
+                    OMEGA_SMALL, CAUTION_ANG_VEL, TARGET_ANG_VEL
+                )
 
         # Caution means pass slowly, not recovery.
             if depth_caution and v_cmd > 0:
@@ -451,26 +459,9 @@ while robot.step(timestep) != -1:
 
                 
                 # Depth camera front obstacle detection (M5.1 — catches floating slabs)
-                depth_front_min = read_depth_front_min()
-                laser_blocked   = center_min < FRONT_BLOCK_DIST
+        depth_front_min = read_depth_front_min()
+        laser_blocked   = center_min < FRONT_BLOCK_DIST
         
-        # depth_blocked   = depth_front_min < DEPTH_FRONT_BLOCK_DIST
-        # # Fuse laser + depth into block_timer
-        # if laser_blocked or depth_blocked:
-        #     block_timer += 1
-        # else:
-        #     block_timer = 0
-
-        # # Pass the tighter of laser/depth so the planner sees the correct clearance
-        # fused_front = min(center_min, depth_front_min)
-
-        # v_cmd, omega_cmd, sel_label = wall_follow_twist(
-        #     fused_front, right_min, left_min,
-        #     block_timer, rear_safe,
-        #     FRONT_BLOCK_DIST, WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
-        #     BLOCK_TIMEOUT, TARGET_LIN_VEL, OMEGA_SMALL, TARGET_ANG_VEL,
-        # )
-
         # Hard emergency override — laser/range sensors (unchanged from M5)
         laser_front_emg = center_min < FRONT_STOP_DIST
         fl_emg = fl_val < FRONT_STOP_DIST
@@ -505,25 +496,7 @@ while robot.step(timestep) != -1:
             omega_cmd = TARGET_ANG_VEL
             sel_label = "rear_blocked_turn_left"
             
-        # front_emg = (center_min < FRONT_STOP_DIST
-        #              or fl_val < FRONT_STOP_DIST
-        #              or fr_val < FRONT_STOP_DIST)
-        # if v_cmd > 0 and front_emg:
-        #     v_cmd = 0.0
-        #     sel_label = sel_label + '_emg'
-
-        # # Hard depth emergency stop — belt-and-suspenders for floating obstacles
-        # if v_cmd > 0 and depth_front_min < DEPTH_FRONT_STOP_DIST:
-        #     v_cmd = 0.0
-        #     sel_label = sel_label + '_depth_emg'
-
-        # Throttled depth debug output
         if step_count % 10 == 0:
-            # print(
-            #     f"[DEPTH] front={depth_front_min:.3f}m blocked={depth_blocked}"
-            #     f" | {sel_label} v={v_cmd:+.2f} omega={omega_cmd:+.2f}"
-            # )
-
             print(
                 f"[DEPTH] front={depth_front_min:.3f} "
                 f"caution={depth_caution} block={depth_blocked} emg={depth_emg} "

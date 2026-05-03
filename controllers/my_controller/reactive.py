@@ -207,84 +207,61 @@ def local_plan(sectors, recent_omegas, fl_emergency, fr_emergency,
     return best_v, best_omega, best_label
 
 
-# ---------------------------------------------------------------------------
-# Right-hand wall-following planner (M5 — active autonomous behavior)
-# ---------------------------------------------------------------------------
 
 def wall_follow_twist(front_min, right_min, left_min,
                       block_timer, rear_safe,
-                      front_block, wall_target, wall_band, wall_lost, side_danger,
-                      block_timeout, v_fwd, omega_small, omega_large):
-    """Right-hand wall-following controller.
+                      front_block, front_caution,
+                      wall_target, wall_band, wall_lost, side_danger,
+                      block_timeout,
+                      v_fwd, v_caution,
+                      omega_small, omega_caution, omega_large):
+    """Right-hand wall-following with front caution and open-side turning."""
 
-    Priority order (highest to lowest):
-      1. Front blocked — rotate left; timeout recovery if stuck too long.
-      2. Left side dangerously close — steer right.
-      3. Right side dangerously close — steer left.
-      4. Right wall lost (> wall_lost) — arc right to reacquire.
-      5. Right wall too far (outside dead band) — gentle right correction.
-      6. Right wall too close (outside dead band) — gentle left correction.
-      7. Otherwise — forward.
+    # Decide which side is more open
+    # Positive omega = turn left
+    # Negative omega = turn right
+    if left_min > right_min:
+        open_side_omega = omega_large
+        open_side_omega_caution = omega_caution
+        open_side_label = "left"
+    else:
+        open_side_omega = -omega_large
+        open_side_omega_caution = -omega_caution
+        open_side_label = "right"
 
-    Parameters
-    ----------
-    front_min, right_min, left_min : float
-        Minimum laser distances in the centre, right, and left sectors (m).
-    block_timer : int
-        Consecutive steps the front has been blocked (< front_block).
-    rear_safe : bool
-        True when rear range sensors are clear enough to reverse.
-    front_block : float
-        Centre clearance below which a left rotate is triggered (m).
-    wall_target : float
-        Desired right-wall distance (m).
-    wall_band : float
-        Dead-band half-width around wall_target; inside = no correction (m).
-    wall_lost : float
-        Right distance above which the wall is considered lost (m).
-    side_danger : float
-        Side clearance below which danger steering activates (m).
-    block_timeout : int
-        Blocked steps before timeout recovery activates.
-    v_fwd : float
-        Nominal forward speed (m/s).
-    omega_small : float
-        Gentle correction angular rate (rad/s).
-    omega_large : float
-        Strong rotate angular rate (rad/s).
-
-    Returns
-    -------
-    (v, omega, label) : (float, float, str)
-    """
-    # 1. Front blocked — highest priority
-    if front_min < front_block:
+    # 1. Front truly blocked
+    if front_min <= front_block:
         if block_timer >= block_timeout:
             if rear_safe:
-                return -v_fwd, 0.0, 'recovery_backup'
+                return -v_fwd, 0.0, "recovery_backup"
             else:
-                return 0.0, omega_large, 'recovery_rotate'
-        return 0.0, omega_large, 'turn_left'
+                return 0.0, open_side_omega, f"recovery_rotate_{open_side_label}"
 
-    # 2. Left side danger — steer right (slow to reduce closing speed)
+        return 0.0, open_side_omega, f"front_block_turn_{open_side_label}"
+
+    # 2. Front caution zone: narrow but maybe passable
+    if front_min <= front_caution:
+        return v_caution, open_side_omega_caution, f"front_caution_turn_{open_side_label}"
+
+    # 3. Left side danger
     if left_min < side_danger:
-        return v_fwd * 0.5, -omega_small, 'avoid_left'
+        return v_fwd * 0.5, -omega_small, "avoid_left"
 
-    # 3. Right side danger — steer left
+    # 4. Right side danger
     if right_min < side_danger:
-        return v_fwd * 0.5, omega_small, 'avoid_right'
+        return v_fwd * 0.5, omega_small, "avoid_right"
 
-    # 4. Right wall lost — arc right to reacquire
+    # 5. Right wall lost
     if right_min > wall_lost:
-        return v_fwd, -omega_small, 'seek_wall'
+        return v_fwd, -omega_small, "seek_wall"
 
-    # 5. Right wall too far — gentle right correction
+    # 6. Right wall too far
     if right_min > wall_target + wall_band:
-        return v_fwd, -omega_small, 'correct_right'
+        return v_fwd, -omega_small, "correct_right"
 
-    # 6. Right wall too close — gentle left correction
+    # 7. Right wall too close
     if right_min < wall_target - wall_band:
-        return v_fwd, omega_small, 'correct_left'
+        return v_fwd, omega_small, "correct_left"
 
-    # 7. Inside dead band — drive straight
-    return v_fwd, 0.0, 'forward'
+    # 8. Good corridor
+    return v_fwd, 0.0, "forward"
