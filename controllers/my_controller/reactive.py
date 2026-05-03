@@ -53,13 +53,30 @@ def wall_follow_twist(front_min, right_min, left_min,
                       wall_target, wall_band, wall_lost, side_danger,
                       block_timeout,
                       v_fwd, v_caution,
-                      omega_small, omega_caution, omega_large):
+                      omega_small, omega_caution, omega_large,
+                      open_side_hint=None):
     """Right-hand wall-following with front caution and open-side turning."""
+
+    def _announce(action, v, omega):
+        print(
+            f"[REACTIVE] {action} | "
+            f"front={front_min:.3f} left={left_min:.3f} right={right_min:.3f} | "
+            f"v={v:+.2f} omega={omega:+.2f}"
+        )
+        return v, omega
 
     # Decide which side is more open
     # Positive omega = turn left
     # Negative omega = turn right
-    if left_min > right_min:
+    if open_side_hint == "left":
+        open_side_omega = omega_large
+        open_side_omega_caution = omega_caution
+        open_side_label = "left"
+    elif open_side_hint == "right":
+        open_side_omega = -omega_large
+        open_side_omega_caution = -omega_caution
+        open_side_label = "right"
+    elif left_min > right_min:
         open_side_omega = omega_large
         open_side_omega_caution = omega_caution
         open_side_label = "left"
@@ -67,40 +84,54 @@ def wall_follow_twist(front_min, right_min, left_min,
         open_side_omega = -omega_large
         open_side_omega_caution = -omega_caution
         open_side_label = "right"
+    print(
+        f"[REACTIVE] open side: {open_side_label} | "
+        f"left={left_min:.3f} right={right_min:.3f}"
+    )
 
     # 1. Front truly blocked
     if front_min <= front_block:
         if block_timer >= block_timeout:
             if rear_safe:
-                return -v_fwd, 0.0, "recovery_backup"
+                v, omega = _announce("front blocked too long: backing up", -v_fwd, 0.0)
+                return v, omega, "recovery_backup"
             else:
-                return 0.0, open_side_omega, f"recovery_rotate_{open_side_label}"
+                v, omega = _announce(f"front blocked too long: rotate {open_side_label}", 0.0, open_side_omega)
+                return v, omega, f"recovery_rotate_{open_side_label}"
 
-        return 0.0, open_side_omega, f"front_block_turn_{open_side_label}"
+        v, omega = _announce(f"front blocked: turn {open_side_label}", 0.0, open_side_omega)
+        return v, omega, f"front_block_turn_{open_side_label}"
 
     # 2. Front caution zone: narrow but maybe passable
     if front_min <= front_caution:
-        return v_caution, open_side_omega_caution, f"front_caution_turn_{open_side_label}"
+        v, omega = _announce(f"front caution: slow slight {open_side_label}", v_caution, open_side_omega_caution)
+        return v, omega, f"front_caution_turn_{open_side_label}"
 
     # 3. Left side danger
     if left_min < side_danger:
-        return v_fwd * 0.5, -omega_small, "avoid_left"
+        v, omega = _announce("left side too close: slow slight right", v_fwd * 0.5, -omega_small)
+        return v, omega, "avoid_left"
 
     # 4. Right side danger
     if right_min < side_danger:
-        return v_fwd * 0.5, omega_small, "avoid_right"
+        v, omega = _announce("right side too close: slow slight left", v_fwd * 0.5, omega_small)
+        return v, omega, "avoid_right"
 
     # 5. Right wall lost
     if right_min > wall_lost:
-        return v_fwd, -omega_small, "seek_wall"
+        v, omega = _announce("right wall lost: slight right", v_fwd, -omega_small)
+        return v, omega, "seek_wall"
 
     # 6. Right wall too far
     if right_min > wall_target + wall_band:
-        return v_fwd, -omega_small, "correct_right"
+        v, omega = _announce("right wall too far: slight right", v_fwd, -omega_small)
+        return v, omega, "correct_right"
 
     # 7. Right wall too close
     if right_min < wall_target - wall_band:
-        return v_fwd, omega_small, "correct_left"
+        v, omega = _announce("right wall too close: slight left", v_fwd, omega_small)
+        return v, omega, "correct_left"
 
     # 8. Good corridor
-    return v_fwd, 0.0, "forward"
+    v, omega = _announce("corridor good: forward", v_fwd, 0.0)
+    return v, omega, "forward"

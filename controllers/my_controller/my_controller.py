@@ -9,7 +9,7 @@ Keys: F/S/A/D drive | Space stop | T self-test | G autonomous | I snapshot | L l
 import devices                          # hardware init (must import first)
 import sensors
 import motion
-from autonomous import autonomous_step
+from autonomous import autonomous_step, reset_autonomous_state
 from sensor_debug import format_compact_sensors, format_sensor_snapshot
 from config import TARGET_LIN_VEL, TARGET_ANG_VEL, FRONT_STOP_DIST
 
@@ -54,6 +54,7 @@ while devices.robot.step(devices.timestep) != -1:
         auto_mode = not auto_mode
         if not auto_mode:
             block_timer = 0
+            reset_autonomous_state()
         print(f"Autonomous mode {'ON' if auto_mode else 'OFF'}")
 
     # ── Hard stop: Space exits autonomous mode and zeroes twist ───────────────
@@ -62,6 +63,7 @@ while devices.robot.step(devices.timestep) != -1:
         if auto_mode:
             auto_mode   = False
             block_timer = 0
+            reset_autonomous_state()
             print("Autonomous mode OFF (Space pressed)")
 
     # ── Autonomous or teleop (mutually exclusive) ─────────────────────────────
@@ -70,9 +72,11 @@ while devices.robot.step(devices.timestep) != -1:
 
         if step_count % 10 == 0:
             print(
-                f"[DEPTH] front={dbg['depth_front']:.3f} "
-                f"caution={dbg['depth_caution']} block={dbg['depth_blocked']} "
-                f"emg={dbg['depth_emg']} block_timer={dbg['block_timer']} | "
+                f"[COLOR] green={dbg['green']}:{dbg['green_ratio']:.3f} "
+                f"dist={dbg['green_distance']:.3f} "
+                f"blue={dbg['blue']}:{dbg['blue_ratio']:.3f} "
+                f"yellow={dbg['yellow']}:{dbg['yellow_ratio']:.3f} | "
+                f"block_timer={dbg['block_timer']} | "
                 f"{sel_label} v={v_cmd:+.2f} omega={omega_cmd:+.2f}"
             )
 
@@ -101,12 +105,12 @@ while devices.robot.step(devices.timestep) != -1:
     # ── Apply twist ────────────────────────────────────────────────────────────
     v_real, omega_real, wL, wR = motion.drive_twist(v_cmd, omega_cmd)
 
-    if step_count % 10 == 0:
-        mode_str = f"AUTO:{sel_label}" if auto_mode else "TELE"
-        print(
-            f"step={step_count} [{mode_str}] "
-            f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
-            f"-> wL={wL:+.2f} wR={wR:+.2f} rad/s"
-        )
-        if sensor_log:
-            print(format_compact_sensors(sensors.read_sensor_snapshot()))
+    # if step_count % 10 == 0:
+    #     mode_str = f"AUTO:{sel_label}" if auto_mode else "TELE"
+    #     print(
+    #         f"step={step_count} [{mode_str}] "
+    #         f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
+    #         f"-> wL={wL:+.2f} wR={wR:+.2f} rad/s"
+    #     )
+    #     if sensor_log:
+    #         print(format_compact_sensors(sensors.read_sensor_snapshot()))
