@@ -14,8 +14,8 @@ FRONT_BLOCK_DIST   = 0.25  # m — robot is blocked; stop forward and rotate
 FRONT_CAUTION_DIST = 0.35  # m — caution zone entry; slow down and steer
 
 # ── Caution zone speeds ───────────────────────────────────────────────────────
-CAUTION_LIN_VEL = 0.04  # m/s   — reduced forward speed in caution zone
-CAUTION_ANG_VEL = 0.08  # rad/s — steering rate in caution zone
+CAUTION_LIN_VEL = 0.08  # m/s   — reduced forward speed in caution zone
+CAUTION_ANG_VEL = 0.12  # rad/s — steering rate in caution zone
 
 # ── Wall following ────────────────────────────────────────────────────────────
 WALL_TARGET_DIST = 0.35  # m     — desired right-wall following distance

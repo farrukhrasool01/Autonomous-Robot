@@ -87,16 +87,7 @@ while devices.robot.step(devices.timestep) != -1:
             omega_cmd = TARGET_ANG_VEL
         elif ord('D') in pressed_now or ord('d') in pressed_now:
             omega_cmd = -TARGET_ANG_VEL
-
-    # ── Motor self-test: T drives forward for 2 s ─────────────────────────────
-    if (ord('T') in new_keys or ord('t') in new_keys) and test_timer == 0:
-        if auto_mode:
-            auto_mode   = False
-            block_timer = 0
-            print("Autonomous mode OFF (motor self-test starting)")
-        test_timer = int(2000 / max(1, devices.timestep))
-        print(f"Starting 2 s motor test at v={TARGET_LIN_VEL:.2f} m/s")
-
+    
     if test_timer > 0:
         v_cmd, omega_cmd = TARGET_LIN_VEL, 0.0
         test_timer -= 1
