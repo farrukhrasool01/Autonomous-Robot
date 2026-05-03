@@ -28,10 +28,11 @@ def get_front_laser_min():
 
 
 def read_depth_front_min():
-    """5th-percentile depth in the front-centre ROI (floating-obstacle detection).
+    """5th-percentile depth across the full camera frame (floating-obstacle detection).
 
-    ROI: centre third of width, upper two-thirds of height, every 2nd pixel.
-    Returns float('inf') when depth is unavailable or the ROI has no valid pixels.
+    Uses the entire width and full height so a floating wall cannot escape the ROI
+    when the robot makes a slight turn.  Every 2nd pixel is sampled for speed.
+    Returns float('inf') when depth is unavailable or no valid pixels exist.
     """
     if devices.camera_depth is None:
         return float('inf')
@@ -44,14 +45,10 @@ def read_depth_front_min():
     if not data or w == 0 or h == 0:
         return float('inf')
 
-    col_start = w // 3
-    col_end   = 2 * w // 3
-    row_end   = 2 * h // 3
-
     vals = []
-    for row in range(0, row_end, 2):
+    for row in range(0, h, 2):
         base = row * w
-        for col in range(col_start, col_end, 2):
+        for col in range(0, w, 2):
             v = data[base + col]
             if math.isfinite(v) and v > DEPTH_MIN_VALID:
                 vals.append(v)

@@ -5,7 +5,7 @@ Adjust these to tune robot behaviour without touching logic files.
 """
 
 # ── Motion speeds ────────────────────────────────────────────────────────────
-TARGET_LIN_VEL = 0.05   # m/s   — nominal forward speed
+TARGET_LIN_VEL = 0.15   # m/s   — nominal forward speed
 TARGET_ANG_VEL = 0.50   # rad/s — nominal rotation rate
 
 # ── Laser front safety thresholds ────────────────────────────────────────────
@@ -31,5 +31,5 @@ REAR_SAFE_DIST = 0.25  # m     — rear range below which reverse is forbidden
 # ── Depth camera safety ───────────────────────────────────────────────────────
 DEPTH_CAUTION_DIST     = 0.60  # m — depth caution zone (slow down)
 DEPTH_FRONT_BLOCK_DIST = 0.45  # m — depth hard block (stop and rotate)
-DEPTH_FRONT_STOP_DIST  = 0.10  # m — depth emergency stop
-DEPTH_MIN_VALID        = 0.10  # m — minimum valid depth pixel value
+DEPTH_FRONT_STOP_DIST  = 0.20  # m — depth emergency stop
+DEPTH_MIN_VALID        = 0.30  # m — minimum valid depth pixel value
