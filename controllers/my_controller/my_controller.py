@@ -21,6 +21,8 @@ from kinematics import (
     wheel_speeds_from_twist,
 )
 from sensor_debug import format_compact_sensors, format_sensor_snapshot
+from reactive import laser_5_sectors, wall_follow_twist
+# local_plan and candidate functions remain in reactive.py for reference but are not called here
 
 robot = Robot()
 timestep = int(robot.getBasicTimeStep())
@@ -158,6 +160,42 @@ def get_front_laser_min():
     front = [r for r in ranges[start:end] if r > 0.0 and math.isfinite(r)]
     return min(front) if front else float('inf')
 
+def read_depth_front_min():
+    """5th-percentile depth in the front-centre ROI for floating-obstacle detection.
+
+    ROI: centre third of width, upper two-thirds of height, sampled every 2 px.
+    Returns float('inf') when depth is unavailable or the ROI has no valid pixels.
+    """
+    if camera_depth is None:
+        return float('inf')
+    try:
+        w = camera_depth.getWidth()
+        h = camera_depth.getHeight()
+        data = camera_depth.getRangeImage()
+    except Exception:
+        return float('inf')
+    if not data or w == 0 or h == 0:
+        return float('inf')
+
+    col_start = w // 3
+    col_end   = 2 * w // 3
+    row_end   = 2 * h // 3
+
+    vals = []
+    for row in range(0, row_end, 2):
+        base = row * w
+        for col in range(col_start, col_end, 2):
+            v = data[base + col]
+            if math.isfinite(v) and v > DEPTH_MIN_VALID:
+                vals.append(v)
+
+    if not vals:
+        return float('inf')
+
+    vals.sort()
+    idx = max(0, len(vals) // 20)   # 5th percentile
+    return vals[idx]
+
 def read_sensor_snapshot():
     """Read every enabled sensor and return a readings dict for sensor_debug."""
     r = {}
@@ -194,7 +232,7 @@ def read_sensor_snapshot():
         except Exception:
             r[key] = None
 
-    # Laser
+    # Laser   
     if laser:
         try:
             data = laser.getRangeImage()
@@ -241,75 +279,277 @@ def read_sensor_snapshot():
     return r
 
 # ---------------------- control params ----------------
-TARGET_LIN_VEL = 0.2    # m/s, forward/backward target speed for teleop
-TARGET_ANG_VEL = 0.5    # rad/s, in-place rotation target rate for teleop
-FRONT_STOP_DIST = 0.25  # meters: if obstacle closer than this, prevent forward motion
+# TARGET_LIN_VEL = 0.16    # m/s, forward/backward target speed for teleop
+# TARGET_ANG_VEL = 0.2    # rad/s, in-place rotation target rate for teleop
+# FRONT_STOP_DIST = 0.10  # meters: hard-stop threshold (laser center zone)
+# # Wall-following constants (M5 — active autonomous behavior)
+# FRONT_BLOCK_DIST = 0.30  # front clearance below this triggers rotate-left (m)
+# WALL_TARGET_DIST = 0.35  # desired right-wall following distance (m)
+# WALL_CLOSE_BAND  = 0.12  # dead-band half-width around wall target (m)
+# WALL_LOST_DIST   = 0.70  # right distance above this → wall lost, seek right (m)
+# SIDE_DANGER_DIST = 0.18  # side clearance below this → danger steer (m)
+# OMEGA_SMALL      = 0.22  # gentle wall-correction angular rate (rad/s)
+# BLOCK_TIMEOUT    = 40    # front-blocked steps before timeout recovery activates
+# REAR_SAFE_DIST   = 0.25  # rear range below this → do not reverse (m)
+
+TARGET_LIN_VEL = 0.14
+TARGET_ANG_VEL = 0.50
+
+
+FRONT_STOP_DIST  = 0.15
+FRONT_BLOCK_DIST = 0.30
+
+WALL_TARGET_DIST = 0.35
+WALL_CLOSE_BAND  = 0.12
+WALL_LOST_DIST   = 0.80
+
+SIDE_DANGER_DIST = 0.18
+OMEGA_SMALL      = 0.22
+
+BLOCK_TIMEOUT  = 40
+REAR_SAFE_DIST = 0.25
+
+# Depth camera safety constants (M5.1 — floating obstacle detection)
+DEPTH_CAUTION_DIST     = 0.60  # slow down below this
+DEPTH_FRONT_BLOCK_DIST = 0.45  # hard block below this
+DEPTH_FRONT_STOP_DIST  = 0.10  # emergency below this
+DEPTH_MIN_VALID        = 0.10
+
 
 step_count = 0
 
-# Keep track of the last non-empty key so short presses or holds are handled
-current_key = -1
+# Keyboard edge detection
+previous_pressed_keys = set()
+
 # test mode timer (when >0 the robot will drive forward to check motors)
 test_timer = 0
 
 # Sensor debug state
 sensor_log_enabled = False   # toggled by L key
-snapshot_cooldown  = 0       # prevents I from firing every step while held
-log_toggle_cooldown = 0      # prevents L from toggling every step while held
+
+# Autonomous mode state
+auto_mode   = False   # toggled by G key
+block_timer = 0       # consecutive steps with front clearance < FRONT_BLOCK_DIST
 
 print(
     "Controller ready.  Keys: F/S/A/D drive | Space stop | T self-test | "
-    "I sensor snapshot | L toggle sensor log"
+    "G autonomous mode | I sensor snapshot | L toggle sensor log"
 )
 
 # ---------------------- main loop ---------------------
 while robot.step(timestep) != -1:
     step_count += 1
 
-    # Read all pending key events this timestep; keep the last non--1 as current
-    key = keyboard.getKey()
-    while key != -1:
-        # log every raw key event for debugging
-        print(f"raw key event: {key}")
-        current_key = key
-        key = keyboard.getKey()
+    # Build key sets for edge detection this timestep
+    pressed_keys_now = set()
+    k = keyboard.getKey()
+    while k != -1:
+        pressed_keys_now.add(k)
+        k = keyboard.getKey()
+    # new_key_events: keys that just appeared (not held from last step)
+    new_key_events = pressed_keys_now - previous_pressed_keys
 
     # Default twist: hold position
     v_cmd = 0.0
     omega_cmd = 0.0
+    sel_label = ''
 
     # Simple safety: check front obstacle distance
     front_min = get_front_laser_min()
 
-    # --- Sensor debug: I = full snapshot, L = toggle compact per-step log ---
-    if current_key in (ord('I'), ord('i')) and snapshot_cooldown == 0:
+    # --- Sensor debug: I = snapshot (one-shot), L = toggle log (one-shot) ---
+    if ord('I') in new_key_events or ord('i') in new_key_events:
         print(format_sensor_snapshot(read_sensor_snapshot()))
-        snapshot_cooldown = 20
-    if snapshot_cooldown > 0:
-        snapshot_cooldown -= 1
 
-    if current_key in (ord('L'), ord('l')) and log_toggle_cooldown == 0:
+    if ord('L') in new_key_events or ord('l') in new_key_events:
         sensor_log_enabled = not sensor_log_enabled
         print(f"Sensor logging {'ON' if sensor_log_enabled else 'OFF'}")
-        log_toggle_cooldown = 20
-    if log_toggle_cooldown > 0:
-        log_toggle_cooldown -= 1
 
-    # Map ASDF to body twists (F forward, S back, A yaw-left, D yaw-right)
-    if current_key in (ord('F'), ord('f')):
-        if front_min >= FRONT_STOP_DIST:
-            v_cmd = TARGET_LIN_VEL
-    elif current_key in (ord('S'), ord('s')):
-        v_cmd = -TARGET_LIN_VEL
-    elif current_key in (ord('A'), ord('a')):
-        omega_cmd = TARGET_ANG_VEL
-    elif current_key in (ord('D'), ord('d')):
-        omega_cmd = -TARGET_ANG_VEL
-    elif current_key == ord(' '):
+    # --- Autonomous mode toggle: G (one-shot, exactly once per physical press) ---
+    if ord('G') in new_key_events or ord('g') in new_key_events:
+        auto_mode = not auto_mode
+        if not auto_mode:
+            block_timer = 0
+        print(f"Autonomous mode {'ON' if auto_mode else 'OFF'}")
+
+    # --- Motion: Space is a hard stop (one-shot) that also exits autonomous mode ---
+    if ord(' ') in new_key_events:
         v_cmd, omega_cmd = 0.0, 0.0
+        if auto_mode:
+            auto_mode = False
+            block_timer = 0
+            print("Autonomous mode OFF (Space pressed)")
 
-    # If 't' is pressed, schedule a short forward self-test
-    if current_key in (ord('T'), ord('t')) and test_timer == 0:
+    # --- Autonomous: right-hand wall following (M5 — active behavior) ---
+    # local_plan() and candidate planner remain in reactive.py but are not called here.
+    elif auto_mode:
+        raw_ranges = []
+        if laser:
+            try:
+                raw_ranges = laser.getRangeImage() or []
+            except Exception:
+                raw_ranges = []
+        sectors = laser_5_sectors(raw_ranges)
+        _, left_min, center_min, right_min, _ = sectors
+
+        fl_val = fl_range.getValue() if fl_range else float('inf')
+        fr_val = fr_range.getValue() if fr_range else float('inf')
+        rl_val = rl_range.getValue() if rl_range else float('inf')
+        rr_val = rr_range.getValue() if rr_range else float('inf')
+
+        rear_safe = rl_val >= REAR_SAFE_DIST and rr_val >= REAR_SAFE_DIST
+
+
+
+        depth_front_min = read_depth_front_min()
+        depth_valid = math.isfinite(depth_front_min)
+
+        depth_caution = (
+            depth_valid and depth_front_min < DEPTH_CAUTION_DIST
+        )
+
+        depth_blocked = (
+            depth_valid and depth_front_min < DEPTH_FRONT_BLOCK_DIST
+        )
+
+        depth_emg = (
+            depth_valid and depth_front_min < DEPTH_FRONT_STOP_DIST
+        )
+
+        laser_blocked = center_min < FRONT_BLOCK_DIST
+
+        # IMPORTANT:
+        # Only real blocks increment block_timer.
+        # Depth caution must NOT increment block_timer.
+        if laser_blocked or depth_blocked:
+            block_timer += 1
+        else:
+            block_timer = 0
+
+        # If depth is truly blocked, bypass wall following and turn away.
+        if depth_blocked:
+            v_cmd = 0.0
+            omega_cmd = TARGET_ANG_VEL
+            sel_label = "depth_block_turn_left"
+
+        else:
+            # In caution zone, still allow wall-following.
+            # Do NOT use depth as fused front unless it is actually blocked.
+            fused_front = center_min
+
+            v_cmd, omega_cmd, sel_label = wall_follow_twist(
+                fused_front, right_min, left_min,
+                block_timer, rear_safe,
+                FRONT_BLOCK_DIST, WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
+                BLOCK_TIMEOUT, TARGET_LIN_VEL, OMEGA_SMALL, TARGET_ANG_VEL,
+            )
+
+        # Caution means pass slowly, not recovery.
+            if depth_caution and v_cmd > 0:
+                v_cmd = min(v_cmd, 0.07)
+                sel_label = sel_label + "_depth_caution"
+
+                
+                # Depth camera front obstacle detection (M5.1 — catches floating slabs)
+                depth_front_min = read_depth_front_min()
+                laser_blocked   = center_min < FRONT_BLOCK_DIST
+        
+        # depth_blocked   = depth_front_min < DEPTH_FRONT_BLOCK_DIST
+        # # Fuse laser + depth into block_timer
+        # if laser_blocked or depth_blocked:
+        #     block_timer += 1
+        # else:
+        #     block_timer = 0
+
+        # # Pass the tighter of laser/depth so the planner sees the correct clearance
+        # fused_front = min(center_min, depth_front_min)
+
+        # v_cmd, omega_cmd, sel_label = wall_follow_twist(
+        #     fused_front, right_min, left_min,
+        #     block_timer, rear_safe,
+        #     FRONT_BLOCK_DIST, WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
+        #     BLOCK_TIMEOUT, TARGET_LIN_VEL, OMEGA_SMALL, TARGET_ANG_VEL,
+        # )
+
+        # Hard emergency override — laser/range sensors (unchanged from M5)
+        laser_front_emg = center_min < FRONT_STOP_DIST
+        fl_emg = fl_val < FRONT_STOP_DIST
+        fr_emg = fr_val < FRONT_STOP_DIST
+        front_emg = laser_front_emg or fl_emg or fr_emg
+
+        # Forward emergency: stop forward motion, but rotate to escape.
+        if v_cmd > 0 and front_emg:
+            v_cmd = 0.0
+
+            if fl_emg and not fr_emg:
+                omega_cmd = -TARGET_ANG_VEL
+                sel_label = "front_left_emg_turn_right"
+            elif fr_emg and not fl_emg:
+                omega_cmd = TARGET_ANG_VEL
+                sel_label = "front_right_emg_turn_left"
+            else:
+                omega_cmd = TARGET_ANG_VEL
+                sel_label = "front_emg_turn_left"
+
+        # Depth emergency: also rotate, do not freeze.
+        if v_cmd > 0 and depth_emg:
+            v_cmd = 0.0
+            omega_cmd = TARGET_ANG_VEL
+            sel_label = "depth_emg_turn_left"
+
+        # Rear safety: rear sensors should only block reverse motion.
+        rear_blocked = rl_val < REAR_SAFE_DIST or rr_val < REAR_SAFE_DIST
+
+        if v_cmd < 0 and rear_blocked:
+            v_cmd = 0.0
+            omega_cmd = TARGET_ANG_VEL
+            sel_label = "rear_blocked_turn_left"
+            
+        # front_emg = (center_min < FRONT_STOP_DIST
+        #              or fl_val < FRONT_STOP_DIST
+        #              or fr_val < FRONT_STOP_DIST)
+        # if v_cmd > 0 and front_emg:
+        #     v_cmd = 0.0
+        #     sel_label = sel_label + '_emg'
+
+        # # Hard depth emergency stop — belt-and-suspenders for floating obstacles
+        # if v_cmd > 0 and depth_front_min < DEPTH_FRONT_STOP_DIST:
+        #     v_cmd = 0.0
+        #     sel_label = sel_label + '_depth_emg'
+
+        # Throttled depth debug output
+        if step_count % 10 == 0:
+            # print(
+            #     f"[DEPTH] front={depth_front_min:.3f}m blocked={depth_blocked}"
+            #     f" | {sel_label} v={v_cmd:+.2f} omega={omega_cmd:+.2f}"
+            # )
+
+            print(
+                f"[DEPTH] front={depth_front_min:.3f} "
+                f"caution={depth_caution} block={depth_blocked} emg={depth_emg} "
+                f"block_timer={block_timer} | {sel_label} "
+                f"v={v_cmd:+.2f} omega={omega_cmd:+.2f}"
+            )
+
+
+    # --- Teleop: ASDF keyboard motion — continuous while key held ---
+    else:
+        if ord('F') in pressed_keys_now or ord('f') in pressed_keys_now:
+            if front_min >= FRONT_STOP_DIST:
+                v_cmd = TARGET_LIN_VEL
+        elif ord('S') in pressed_keys_now or ord('s') in pressed_keys_now:
+            v_cmd = -TARGET_LIN_VEL
+        elif ord('A') in pressed_keys_now or ord('a') in pressed_keys_now:
+            omega_cmd = TARGET_ANG_VEL
+        elif ord('D') in pressed_keys_now or ord('d') in pressed_keys_now:
+            omega_cmd = -TARGET_ANG_VEL
+
+    # --- T self-test: one-shot, disables autonomous mode ---
+    if (ord('T') in new_key_events or ord('t') in new_key_events) and test_timer == 0:
+        if auto_mode:
+            auto_mode = False
+            block_timer = 0
+            print("Autonomous mode OFF (motor self-test starting)")
         test_timer = int(2000 / max(1, timestep))  # 2 seconds worth of steps
         print(f"Starting 2s motor test at v={TARGET_LIN_VEL:.2f} m/s to verify motors")
 
@@ -321,18 +561,17 @@ while robot.step(timestep) != -1:
             v_cmd, omega_cmd = 0.0, 0.0
             print("Motor test complete; stopping motors")
 
+    # Advance edge-detection state before next timestep
+    previous_pressed_keys = pressed_keys_now
+
     # Convert commanded twist into wheel angular velocities and apply.
     v_real, omega_real, left_speed, right_speed = drive_twist(v_cmd, omega_cmd)
 
     # Debug output to Webots console
     if step_count % 10 == 0:  # throttle logging
-        active = current_key if current_key != -1 else 'None'
-        try:
-            active_repr = chr(active) if isinstance(active, int) and 32 <= active <= 126 else active
-        except Exception:
-            active_repr = active
+        mode_str = f"AUTO:{sel_label}" if auto_mode else "TELE"
         print(
-            f"step={step_count} key={active_repr} front_min={front_min:.3f} "
+            f"step={step_count} [{mode_str}] front_min={front_min:.3f} "
             f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
             f"-> wL={left_speed:+.2f} wR={right_speed:+.2f} rad/s"
         )
