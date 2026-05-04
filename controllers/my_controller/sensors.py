@@ -8,7 +8,7 @@ import math
 
 import devices
 from config import (
-    GREEN_DEPTH_MIN_VALID, GREEN_PIXEL_RATIO, TARGET_PIXEL_RATIO,
+    GREEN_DEPTH_MIN_VALID, GREEN_PIXEL_RATIO, TARGET_PIXEL_RATIO, FRONT_BLOCK_DIST
 )
 
 
@@ -173,6 +173,101 @@ def _read_depth_center():
         return None
     return w, h, data[h // 2 * w + w // 2]
 
+def overhead_depth_regions(max_distance):
+    """Detect overhead/floating obstacles in upper-left, upper-center, upper-right depth ROIs.
+
+    Returns:
+        detected: bool
+        region_name: "left", "center", "right", or "none"
+        depth_value: robust nearest depth in detected region, or inf
+    """
+    data, w, h = _read_depth_image()
+    if data is None:
+        return False, "none", INF
+
+    rois = {
+        "left":   (0.05, 0.40, 0.02, 0.55),
+        "center": (0.25, 0.75, 0.02, 0.55),
+        "right":  (0.60, 0.95, 0.02, 0.55),
+    }
+
+    best_region = "none"
+    best_depth = INF
+
+    for name, (x0f, x1f, y0f, y1f) in rois.items():
+        col_start = int(x0f * w)
+        col_end   = int(x1f * w)
+        row_start = int(y0f * h)
+        row_end   = int(y1f * h)
+
+        vals = []
+
+        for row in range(row_start, row_end, 3):
+            base = row * w
+            for col in range(col_start, col_end, 3):
+                v = data[base + col]
+                if math.isfinite(v) and v > GREEN_DEPTH_MIN_VALID:
+                    vals.append(v)
+
+        if not vals:
+            continue
+
+        vals.sort()
+        depth_near = vals[max(0, len(vals) // 20)]  # 5th percentile
+
+        if depth_near < best_depth:
+            best_depth = depth_near
+            best_region = name
+
+    detected = best_depth < max_distance
+    return detected, best_region, best_depth
+
+def overhead_depth_region_values():
+    """Return robust depth values for overhead left/center/right ROIs.
+
+    These are the same ROIs used by overhead_depth_regions().
+    Returns inf for a region if no valid depth pixels exist.
+    """
+    data, w, h = _read_depth_image()
+    if data is None:
+        return {
+            "overhead_left": INF,
+            "overhead_center": INF,
+            "overhead_right": INF,
+        }
+
+    rois = {
+        "overhead_left":   (0.05, 0.40, 0.02, 0.55),
+        "overhead_center": (0.25, 0.75, 0.02, 0.55),
+        "overhead_right":  (0.60, 0.95, 0.02, 0.55),
+    }
+
+    result = {}
+
+    for name, (x0f, x1f, y0f, y1f) in rois.items():
+        col_start = int(x0f * w)
+        col_end   = int(x1f * w)
+        row_start = int(y0f * h)
+        row_end   = int(y1f * h)
+
+        vals = []
+
+        for row in range(row_start, row_end, 3):
+            base = row * w
+            for col in range(col_start, col_end, 3):
+                v = data[base + col]
+                if math.isfinite(v) and v > GREEN_DEPTH_MIN_VALID:
+                    vals.append(v)
+
+        if not vals:
+            result[name] = INF
+            continue
+
+        vals.sort()
+        result[name] = vals[max(0, len(vals) // 20)]  # 5th percentile
+
+    return result
+
 
 def get_front_laser_min():
     """Minimum range in the laser's front-centre band (40% to 60% of rays)."""
@@ -254,4 +349,5 @@ def read_sensor_snapshot():
     r["cam_rgb"] = _read_rgb_center()
     r["colors"] = read_color_detections()
     r["cam_depth"] = _read_depth_center()
+    r.update(overhead_depth_region_values())
     return r

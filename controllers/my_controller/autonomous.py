@@ -54,7 +54,14 @@ def autonomous_step(block_timer):
             raw_ranges = devices.laser.getRangeImage() or []
         except Exception:
             pass
-    _, left_min, center_min, right_min, _ = laser_5_sectors(raw_ranges)
+    far_left, left_min, center_min, right_min, far_right = laser_5_sectors(raw_ranges)
+
+    _, _, overhead_min = sensors.overhead_depth_regions(1.0)
+    center_min = min(center_min, overhead_min)
+
+    print(
+        f"[FRONT] laser={center_min:.3f} overhead={overhead_min:.3f} "
+    )
 
     # ── Short-range sensors ────────────────────────────────────────────────────
     fl_val = devices.fl_range.getValue() if devices.fl_range else float('inf')

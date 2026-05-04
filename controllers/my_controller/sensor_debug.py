@@ -80,6 +80,10 @@ def is_plausible(name, value):
                 "blue", "blue_ratio", "yellow", "yellow_ratio",
             )
         )
+    
+    if name in ("overhead_left", "overhead_center", "overhead_right"):
+        return value is not None and isinstance(value, (int, float))
+
     if name == "cam_depth":
         if not value:
             return False
@@ -216,6 +220,19 @@ def format_sensor_snapshot(readings):
         lines.append(
             f"  depth     : {w}x{h}  center={ctr_str}"
             f"  {_ok(is_plausible('cam_depth', v))}"
+        )
+
+        overhead_left = readings.get("overhead_left")
+        overhead_center = readings.get("overhead_center")
+        overhead_right = readings.get("overhead_right")
+
+        def fmt_overhead(v):
+            return f"{v:.3f}m" if _fin(v) else str(v)
+
+        lines.append(
+            f"  overhead  : left={fmt_overhead(overhead_left)}"
+            f"  center={fmt_overhead(overhead_center)}"
+            f"  right={fmt_overhead(overhead_right)}"
         )
 
     lines.append("=" * 46)

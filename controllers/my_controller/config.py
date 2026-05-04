@@ -5,7 +5,7 @@ Adjust these to tune robot behaviour without touching logic files.
 """
 
 # ── Motion speeds ────────────────────────────────────────────────────────────
-TARGET_LIN_VEL = 0.30   # m/s   — nominal forward speed
+TARGET_LIN_VEL = 0.35   # m/s   — nominal forward speed
 TARGET_ANG_VEL = 0.50   # rad/s — nominal rotation rate
 
 # ── Laser front safety thresholds ────────────────────────────────────────────
@@ -15,7 +15,7 @@ FRONT_BLOCK_CLEAR_DIST = 0.30  # m — blocked state releases only after this cl
 FRONT_CAUTION_DIST = 0.35  # m — caution zone entry; slow down and steer
 
 # ── Caution zone speeds ───────────────────────────────────────────────────────
-CAUTION_LIN_VEL = 0.08  # m/s   — reduced forward speed in caution zone
+CAUTION_LIN_VEL = 0.20  # m/s   — reduced forward speed in caution zone
 CAUTION_ANG_VEL = 0.12  # rad/s — steering rate in caution zone
 
 # ── Wall following ────────────────────────────────────────────────────────────

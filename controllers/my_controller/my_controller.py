@@ -26,6 +26,13 @@ print(
     "G autonomous mode | I sensor snapshot | L toggle sensor log"
 )
 
+
+OVERHEAD_CENTER_BLOCK_DIST = 0.55
+OVERHEAD_SIDE_WARN_DIST = 0.40
+OVERHEAD_SLOW_VEL = 0.04
+OVERHEAD_STEER_OMEGA = 0.12
+
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 while devices.robot.step(devices.timestep) != -1:
     step_count += 1
@@ -104,13 +111,3 @@ while devices.robot.step(devices.timestep) != -1:
 
     # ── Apply twist ────────────────────────────────────────────────────────────
     v_real, omega_real, wL, wR = motion.drive_twist(v_cmd, omega_cmd)
-
-    # if step_count % 10 == 0:
-    #     mode_str = f"AUTO:{sel_label}" if auto_mode else "TELE"
-    #     print(
-    #         f"step={step_count} [{mode_str}] "
-    #         f"cmd v={v_real:+.2f} m/s omega={omega_real:+.2f} rad/s "
-    #         f"-> wL={wL:+.2f} wR={wR:+.2f} rad/s"
-    #     )
-    #     if sensor_log:
-    #         print(format_compact_sensors(sensors.read_sensor_snapshot()))
