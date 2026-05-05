@@ -19,6 +19,7 @@ Laser indexing convention (verified working in M3 / M3.0b):
 """
 
 import math
+from config import TARGET_REV_VEL
 
 
 def laser_5_sectors(ranges):
@@ -93,7 +94,7 @@ def wall_follow_twist(front_min, right_min, left_min,
     if front_min <= front_block:
         if block_timer >= block_timeout:
             if rear_safe:
-                v, omega = _announce("front blocked too long: backing up", -v_fwd, 0.0)
+                v, omega = _announce("front blocked too long: backing up", -TARGET_REV_VEL, 0.0)
                 return v, omega, "recovery_backup"
             else:
                 v, omega = _announce(f"front blocked too long: rotate {open_side_label}", 0.0, open_side_omega)

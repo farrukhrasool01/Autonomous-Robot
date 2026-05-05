@@ -7,12 +7,15 @@ Adjust these to tune robot behaviour without touching logic files.
 # ── Motion speeds ────────────────────────────────────────────────────────────
 TARGET_LIN_VEL = 0.35   # m/s   — nominal forward speed
 TARGET_ANG_VEL = 0.50   # rad/s — nominal rotation rate
-
+TARGET_REV_VEL = 0.20
 # ── Laser front safety thresholds ────────────────────────────────────────────
 FRONT_STOP_DIST    = 0.15  # m — hard emergency stop (laser + range sensors)
 FRONT_BLOCK_DIST   = 0.25  # m — robot is blocked; stop forward and rotate
 FRONT_BLOCK_CLEAR_DIST = 0.30  # m — blocked state releases only after this clearance
 FRONT_CAUTION_DIST = 0.35  # m — caution zone entry; slow down and steer
+
+# ── Overhead/floating obstacle depth safety ───────────────────────────────────
+OVERHEAD_DETECT_DIST = 1.00  # m — depth ROI max range for floating obstacles
 
 # ── Caution zone speeds ───────────────────────────────────────────────────────
 CAUTION_LIN_VEL = 0.20  # m/s   — reduced forward speed in caution zone

@@ -16,6 +16,7 @@ from config import (
     WALL_TARGET_DIST, WALL_CLOSE_BAND, WALL_LOST_DIST, SIDE_DANGER_DIST,
     OMEGA_SMALL, BLOCK_TIMEOUT, REAR_SAFE_DIST,
     GREEN_STOP_DIST, GREEN_CAUTION_DIST,
+    OVERHEAD_DETECT_DIST,
 )
 
 
@@ -33,6 +34,14 @@ def reset_autonomous_state():
     global _block_latched, _block_open_side
     _block_latched = False
     _block_open_side = None
+
+
+def _fuse_front_clearance(laser_front):
+    """Fuse laser front range with overhead depth without hiding close laser blocks."""
+    _, _, overhead_front = sensors.overhead_depth_regions(OVERHEAD_DETECT_DIST)
+    if laser_front > FRONT_CAUTION_DIST:
+        return min(laser_front, overhead_front), overhead_front
+    return laser_front, overhead_front
 
 
 def autonomous_step(block_timer):
@@ -56,12 +65,7 @@ def autonomous_step(block_timer):
             pass
     far_left, left_min, center_min, right_min, far_right = laser_5_sectors(raw_ranges)
 
-    _, _, overhead_min = sensors.overhead_depth_regions(1.0)
-    center_min = min(center_min, overhead_min)
-
-    print(
-        f"[FRONT] laser={center_min:.3f} overhead={overhead_min:.3f} "
-    )
+    center_min, overhead_min = _fuse_front_clearance(center_min)
 
     # ── Short-range sensors ────────────────────────────────────────────────────
     fl_val = devices.fl_range.getValue() if devices.fl_range else float('inf')
@@ -158,6 +162,7 @@ def autonomous_step(block_timer):
         "blue_ratio":    colors["blue_ratio"],
         "yellow":        colors["yellow"],
         "yellow_ratio":  colors["yellow_ratio"],
+        "overhead_front": overhead_min,
         "block_timer":   block_timer,
     }
     return v_cmd, omega_cmd, label, block_timer, debug
