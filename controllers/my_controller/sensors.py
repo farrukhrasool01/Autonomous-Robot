@@ -8,7 +8,8 @@ import math
 
 import devices
 from config import (
-    GREEN_DEPTH_MIN_VALID, GREEN_PIXEL_RATIO, TARGET_PIXEL_RATIO, FRONT_BLOCK_DIST
+    GREEN_DEPTH_MIN_VALID, GREEN_PIXEL_RATIO, TARGET_PIXEL_RATIO,
+    OVERHEAD_BLOCK_DIST, OVERHEAD_CLOSE_RATIO, OVERHEAD_MIN_VALID,
 )
 
 
@@ -172,6 +173,97 @@ def _read_depth_center():
     if data is None:
         return None
     return w, h, data[h // 2 * w + w // 2]
+
+
+def _overhead_depth_rois(w, h):
+    # Upper image bands: where a floating wall intersects the robot body/roof envelope.
+    return {
+        "left":   (int(0.05 * w), int(0.45 * w), int(0.02 * h), int(0.58 * h)),
+        "center": (int(0.18 * w), int(0.82 * w), int(0.02 * h), int(0.60 * h)),
+        "right":  (int(0.55 * w), int(0.95 * w), int(0.02 * h), int(0.58 * h)),
+    }
+
+
+def _depth_roi_stats(data, w, roi, close_dist):
+    col_start, col_end, row_start, row_end = roi
+    sample_count = 0
+    valid = []
+    close_count = 0
+
+    for row in range(row_start, row_end, 3):
+        base = row * w
+        for col in range(col_start, col_end, 3):
+            sample_count += 1
+            v = data[base + col]
+            if not _is_valid_range(v, OVERHEAD_MIN_VALID):
+                continue
+            valid.append(v)
+            if v <= close_dist:
+                close_count += 1
+
+    valid_count = len(valid)
+    close_ratio = close_count / sample_count if sample_count else 0.0
+    valid_ratio = valid_count / sample_count if sample_count else 0.0
+    near = _percentile(valid, 20) if valid else INF
+    return {
+        "near": near,
+        "close_ratio": close_ratio,
+        "valid_ratio": valid_ratio,
+        "samples": sample_count,
+        "valid": valid_count,
+        "close": close_count,
+    }
+
+
+def read_overhead_obstacle():
+    """Detect floating/overhead obstacles in upper depth-camera ROIs.
+
+    A floating wall can leave the laser/range sensors clear while blocking the
+    robot's upper body. This detector uses close-pixel ratios in wide upper ROIs
+    instead of a single center depth pixel.
+    """
+    result = {
+        "blocked": False,
+        "turn_hint": None,
+        "left_dist": INF,
+        "center_dist": INF,
+        "right_dist": INF,
+        "left_ratio": 0.0,
+        "center_ratio": 0.0,
+        "right_ratio": 0.0,
+        "left_valid_ratio": 0.0,
+        "center_valid_ratio": 0.0,
+        "right_valid_ratio": 0.0,
+    }
+
+    data, w, h = _read_depth_image()
+    if data is None:
+        return result
+
+    stats = {
+        name: _depth_roi_stats(data, w, roi, OVERHEAD_BLOCK_DIST)
+        for name, roi in _overhead_depth_rois(w, h).items()
+    }
+
+    for name in ("left", "center", "right"):
+        result[f"{name}_dist"] = stats[name]["near"]
+        result[f"{name}_ratio"] = stats[name]["close_ratio"]
+        result[f"{name}_valid_ratio"] = stats[name]["valid_ratio"]
+
+    center_blocked = (
+        stats["center"]["near"] <= OVERHEAD_BLOCK_DIST
+        and stats["center"]["close_ratio"] >= OVERHEAD_CLOSE_RATIO
+    )
+    result["blocked"] = center_blocked
+
+    if center_blocked:
+        # Turn away from the side with closer/more occupied overhead pixels.
+        left_score = stats["left"]["close_ratio"] / max(stats["left"]["near"], 0.01)
+        right_score = stats["right"]["close_ratio"] / max(stats["right"]["near"], 0.01)
+        result["turn_hint"] = "right" if left_score > right_score else "left"
+
+    return result
+
 
 def overhead_depth_regions(max_distance):
     """Detect overhead/floating obstacles in upper-left, upper-center, upper-right depth ROIs.

@@ -83,7 +83,12 @@ while devices.robot.step(devices.timestep) != -1:
                 f"dist={dbg['green_distance']:.3f} "
                 f"blue={dbg['blue']}:{dbg['blue_ratio']:.3f} "
                 f"yellow={dbg['yellow']}:{dbg['yellow_ratio']:.3f} | "
-                f"overhead={dbg['overhead_front']:.3f} "
+                f"overhead_block={dbg['overhead_blocked']} "
+                f"oh_dist(L/C/R)=({dbg['overhead_left']:.3f}/"
+                f"{dbg['overhead_center']:.3f}/{dbg['overhead_right']:.3f}) "
+                f"oh_ratio(L/C/R)=({dbg['overhead_left_ratio']:.3f}/"
+                f"{dbg['overhead_center_ratio']:.3f}/{dbg['overhead_right_ratio']:.3f}) "
+                f"oh_turn={dbg['overhead_turn_hint']} "
                 f"block_timer={dbg['block_timer']} | "
                 f"{sel_label} v={v_cmd:+.2f} omega={omega_cmd:+.2f}"
             )

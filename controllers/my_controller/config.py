@@ -15,7 +15,9 @@ FRONT_BLOCK_CLEAR_DIST = 0.30  # m — blocked state releases only after this cl
 FRONT_CAUTION_DIST = 0.35  # m — caution zone entry; slow down and steer
 
 # ── Overhead/floating obstacle depth safety ───────────────────────────────────
-OVERHEAD_DETECT_DIST = 1.00  # m — depth ROI max range for floating obstacles
+OVERHEAD_BLOCK_DIST = 0.30  # m — upper forward envelope is physically blocked
+OVERHEAD_CLOSE_RATIO = 0.12  # ROI fraction that must be close to count as blocked
+OVERHEAD_MIN_VALID = 0.03  # m — reject zero/near-zero depth pixels
 
 # ── Caution zone speeds ───────────────────────────────────────────────────────
 CAUTION_LIN_VEL = 0.20  # m/s   — reduced forward speed in caution zone
@@ -30,6 +32,7 @@ OMEGA_SMALL      = 0.22  # rad/s — gentle wall-correction angular rate
 
 # ── Recovery ─────────────────────────────────────────────────────────────────
 BLOCK_TIMEOUT  = 40    # steps — front-blocked steps before timeout recovery activates
+RECOVERY_BACKUP_STEPS = 25  # steps — reverse briefly, then rotate to escape
 REAR_SAFE_DIST = 0.25  # m     — rear range below which reverse is forbidden
 
 # ── RGB semantic detection ────────────────────────────────────────────────────
